@@ -12,24 +12,38 @@
 (defun set-types (elems types)
   (cond
     ((null elems) '())
-    ((eql (car types) 'n) (cons (cons (intern (string-upcase (car (car elems))) :keyword)  (read-from-string (cdr (car elems)))) (set-types (cdr elems) (cdr types))))
-    (t (cons (cons (intern (string-upcase (car (car elems))) :keyword)  (cdr (car elems))) (set-types (cdr elems) (cdr types))))
+    ((eq (car types) :number) (cons (cons (intern (string-upcase (car (car elems))) :keyword)  (read-from-string (cdr (car elems)))) (set-types (cdr elems) (cdr types))))
+    ((eq (car types) :string) (cons (cons (intern (string-upcase (car (car elems))) :keyword)  (cdr (car elems))) (set-types (cdr elems) (cdr types))))
+    (t (error "Неправильний ключовий символ у conf-list: ~s.~%" (car types)))
     )
   )
 
-(defun select (path conf-list)                                   ; conf-list має бути розміром з кількість стовпців у таблиці. Приймає список символів.
-                                                                 ; У цьому списку розрізняються тільки n та НЕ n. (n - для чисел, інші символи для string)
+(defun select (path conf-list)                                   ; conf-list має бути розміром з кількість стовпців у таблиці. Приймає список ключових символів.
+                                                                 ; У цьому списку розрізняються тільки :number та :string, усі інші вважаються помилкою. (:number - для чисел, :string - для рядків)
   (let ((alist (table-to-alist (read-table-from-csv path))))
-    (when (eql (length (car alist)) (length conf-list))
+    (if (eql (length (car alist)) (length conf-list))
       (let ((typed-alist  (mapcan (lambda (x) (list  (set-types x conf-list))) alist))
-            (result '()))
-        (lambda (&key key key-value)
-          (dolist (var typed-alist)
-            (if (and key key-value)
-                (when (equal (cdr (assoc key var))  key-value)
-                  (setf result (cons var result)))
-                (setf result (cons var result))))
-          (reverse result))))))
+            (result '())
+            (state t))
+        (lambda (&rest args)
+          (if (evenp (length args))
+              (progn
+                (dolist (var typed-alist)
+                  (loop for a on args by #'cddr
+                        while (and a state)
+                        do  
+                        (unless (equal (cdr (assoc (first a) var))  (second a)) (setf state nil)))
+                  (if state
+                      (setf result (cons var result))
+                      (setf state t))
+                  
+                  )
+                (reverse result)
+                )
+              (error "Фільтрів має бути парна кількість. Для кожного фільтру спочатку йде ключовий символ, потім значення"))
+         ))
+      (error "Довжина conf-list має бути рівною кількості стовпців таблиці у файлі.~% К-ть стовпців ~a~% Довжина conf-list: ~a~%" (length (car alist)) (length conf-list)))
+   ))
 
 (defun is-line-empty (line)
   (if (string= line "")
@@ -109,13 +123,18 @@
 
 (defun check-function (name func expected &rest args)
   (let ((result (apply func args)))
-    (format t "Result ~a:~% ~a~%" name result)
+    (format t "Result ~a:~% ~s~%" name result)
     (format t "~:[FAILED~;passed~]... ~a~%" (equalp result expected) name)))
 
+(defparameter *conf-aimodels* '(:number :string))
+(defparameter *conf-projects* '(:number :string :number))
+
 (defun test1 ()
-  (check-function "Test1" (select "projects/lab5/AIModels.csv" '(n s)) '(((:MODELID . 1) (:AIMODEL . "Model1")) ((:MODELID . 2) (:AIMODEL . "Model2"))((:MODELID . 3) (:AIMODEL . "Model3"))))
-  (check-function "Test2" (select "projects/lab5/Projects.csv" '(n f n)) '(((:PROJECTID . 3) (:PROJECTNAME . "Project3") (:AIMODELID . 1))((:PROJECTID . 4) (:PROJECTNAME . "Project4") (:AIMODELID . 1)))
-                  :key :aimodelid :key-value 1)
+  (check-function "Test1" (select "projects/lab5/AIModels.csv" *conf-aimodels*) '(((:MODELID . 1) (:AIMODEL . "Model1")) ((:MODELID . 2) (:AIMODEL . "Model2"))((:MODELID . 3) (:AIMODEL . "Model3"))))
+  (check-function "Test2" (select "projects/lab5/Projects.csv" *conf-projects*) '(((:PROJECTID . 3) (:PROJECTNAME . "Project3") (:AIMODELID . 1))((:PROJECTID . 4) (:PROJECTNAME . "Project4") (:AIMODELID . 1)))
+                  :aimodelid 1)
+  (check-function "Test3" (select "projects/lab5/Projects.csv" *conf-projects*) '(((:PROJECTID . 3) (:PROJECTNAME .  "Project3") (:AIMODELID . 1)))
+                  :aimodelid 1 :projectname "Project3")  
   )
 
 
@@ -129,15 +148,15 @@
     (setf (gethash :ProjectName (car ht2)) "Project2")
     (setf (gethash :AIModelID (car ht2)) 3)
     
-    (check-function "Test1" 'alist-to-hash ht1 (funcall (select "projects/lab5/AIModels.csv" '(n s)) :key :modelid :key-value 1))
-    (check-function "Test2" 'alist-to-hash ht2 (funcall (select "projects/lab5/Projects.csv" '(n s n)) :key :projectname :key-value "Project2"))
+    (check-function "Test1" 'alist-to-hash ht1 (funcall (select "projects/lab5/AIModels.csv"  *conf-aimodels*)  :modelid 1))
+    (check-function "Test2" 'alist-to-hash ht2 (funcall (select "projects/lab5/Projects.csv"  *conf-projects*) :projectname "Project2"))
     ))
 
 (defun test-print ()
   (format t "Test Print Alist: ~%")
-  (print-alist  (funcall  (select "projects/lab5/AIModels.csv" '(n s))))
+  (print-alist  (funcall  (select "projects/lab5/AIModels.csv"  *conf-aimodels*)))
   (format t "~%Test Print Hash-list: ~%")
-  (print-hash-list (alist-to-hash (funcall (select "projects/lab5/Projects.csv" '(n s n))))))
+  (print-hash-list (alist-to-hash (funcall (select "projects/lab5/Projects.csv"  *conf-projects*)))))
 
 (defun test-write-csv ()
   (write-to-csv "projects/lab5/Projects1.csv" '(((:PROJECTID . 3) (:PROJECTNAME . "Project3") (:AIMODELID . 1))
